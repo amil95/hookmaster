@@ -1,0 +1,22 @@
+[gd_resource type="TileSet" format=3 uid="uid://ddhsju6vp6qyd"]
+
+[ext_resource type="Texture2D" uid="uid://ble5rndu4k72e" path="res://assets/kenney/new_platformer/terrain_grass_horizontal_middle.png" id="1_uc6dk"]
+[ext_resource type="Texture2D" uid="uid://cao4sxkc5eorr" path="res://assets/kenney/new_platformer/terrain_grass_vertical_middle.png" id="2_tt5ec"]
+
+[sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_3x0g4"]
+texture = ExtResource("1_uc6dk")
+texture_region_size = Vector2i(64, 64)
+0:0/0 = 0
+0:0/0/physics_layer_0/polygon_0/points = PackedVector2Array(-32, -32, 32, -32, 32, 32, -32, 32)
+
+[sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_2digm"]
+texture = ExtResource("2_tt5ec")
+texture_region_size = Vector2i(64, 64)
+0:0/0 = 0
+0:0/0/physics_layer_0/polygon_0/points = PackedVector2Array(-32, -32, 32, -32, 32, 32, -32, 32)
+
+[resource]
+tile_size = Vector2i(64, 64)
+physics_layer_0/collision_layer = 1
+sources/0 = SubResource("TileSetAtlasSource_3x0g4")
+sources/1 = SubResource("TileSetAtlasSource_2digm")

@@ -1,0 +1,205 @@
+[gd_scene format=4 uid="uid://d05hoqoh8uq2i"]
+
+[ext_resource type="Script" uid="uid://c26hy3d53a3mj" path="res://scripts/player.gd" id="1_player"]
+[ext_resource type="Texture2D" uid="uid://42pufjukhf33" path="res://assets/kenney/new_platformer/character_green_idle.png" id="3_player_art"]
+[ext_resource type="Script" uid="uid://6xdcvhitdg5n" path="res://scripts/training_dummy.gd" id="5_dummy"]
+[ext_resource type="TileSet" uid="uid://ddhsju6vp6qyd" path="res://tilesets/ground_tileset.tres" id="6_tileset"]
+[ext_resource type="Texture2D" uid="uid://o5f3h3lfu2wv" path="res://assets/kenney/new_platformer/slime_block_rest.png" id="7_enemy_art"]
+[ext_resource type="Script" uid="uid://bf4y1w4f6s1ae" path="res://scripts/swinging_axe.gd" id="8_axe"]
+[ext_resource type="Texture2D" path="res://assets/ui/xbox_controls.png" id="9_controller_legend"]
+[ext_resource type="Script" path="res://scripts/scene_door.gd" id="10_door"]
+
+[sub_resource type="CircleShape2D" id="CircleShape2D_axe"]
+radius = 25.0
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_player"]
+size = Vector2(44, 64)
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_dummy"]
+size = Vector2(48, 64)
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_sword"]
+size = Vector2(68, 10)
+
+[node name="Main" type="Node2D" unique_id=1750091378]
+
+[node name="Background" type="ColorRect" parent="." unique_id=2029225807]
+offset_right = 1280.0
+offset_bottom = 720.0
+mouse_filter = 2
+color = Color(0.055, 0.075, 0.13, 1)
+
+[node name="HUD" type="CanvasLayer" parent="."]
+layer = 1
+
+[node name="Title" type="Label" parent="HUD" unique_id=201238963]
+offset_left = 48.0
+offset_top = 40.0
+theme_override_colors/font_color = Color(0.8, 0.9, 1, 1)
+theme_override_font_sizes/font_size = 26
+text = "First Platformer"
+
+[node name="ControllerInstructions" type="TextureRect" parent="HUD"]
+offset_left = 48.0
+offset_top = 80.0
+offset_right = 1148.0
+offset_bottom = 164.0
+texture = ExtResource("9_controller_legend")
+expand_mode = 0
+stretch_mode = 0
+mouse_filter = 2
+
+[node name="ResetMessage" type="Label" parent="HUD" unique_id=691802133]
+visible = false
+offset_left = 490.0
+offset_top = 300.0
+offset_right = 800.0
+offset_bottom = 350.0
+theme_override_colors/font_color = Color(1, 0.72, 0.42, 1)
+theme_override_font_sizes/font_size = 28
+text = "Fell! Resetting…"
+
+[node name="Terrain" type="TileMapLayer" parent="." unique_id=564838242]
+tile_map_data = PackedByteArray("AAAAAAoAAAAAAAAAAAABAAoAAAAAAAAAAAACAAoAAAAAAAAAAAADAAoAAAAAAAAAAAAEAAoAAAAAAAAAAAAFAAoAAAAAAAAAAAAGAAoAAAAAAAAAAAAHAAoAAAAAAAAAAAAIAAoAAAAAAAAAAAAJAAoAAAAAAAAAAAAKAAoAAAAAAAAAAAALAAoAAAAAAAAAAAAMAAoAAAAAAAAAAAANAAoAAAAAAAAAAAAOAAoAAAAAAAAAAAAPAAoAAAAAAAAAAAAQAAoAAAAAAAAAAAARAAoAAAAAAAAAAAASAAoAAAAAAAAAAAATAAoAAAAAAAAAAAA=")
+tile_set = ExtResource("6_tileset")
+
+[node name="BoundaryWalls" type="TileMapLayer" parent="." unique_id=534006986]
+tile_map_data = PackedByteArray("AAAAAAAAAQAAAAAAAAATAAAAAQAAAAAAAAAAAAEAAQAAAAAAAAATAAEAAQAAAAAAAAAAAAIAAQAAAAAAAAATAAIAAQAAAAAAAAAAAAMAAQAAAAAAAAATAAMAAQAAAAAAAAAAAAQAAQAAAAAAAAATAAQAAQAAAAAAAAAAAAUAAQAAAAAAAAATAAUAAQAAAAAAAAAAAAYAAQAAAAAAAAATAAYAAQAAAAAAAAAAAAcAAQAAAAAAAAATAAcAAQAAAAAAAAAAAAgAAQAAAAAAAAATAAgAAQAAAAAAAAAAAAkAAQAAAAAAAAATAAkAAQAAAAAAAAA=")
+tile_set = ExtResource("6_tileset")
+
+[node name="RaisedPlatform" type="Node2D" parent="." unique_id=975512761]
+position = Vector2(438, 358)
+
+[node name="Tiles" type="TileMapLayer" parent="RaisedPlatform" unique_id=847449609]
+tile_map_data = PackedByteArray("AAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAACAAAAAAAAAAAAAAADAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAA=")
+tile_set = ExtResource("6_tileset")
+
+[node name="SwingingAxe" type="Node2D" parent="RaisedPlatform" unique_id=830131385]
+position = Vector2(160, -148)
+script = ExtResource("8_axe")
+
+[node name="Pivot" type="Node2D" parent="RaisedPlatform/SwingingAxe" unique_id=1572173791]
+
+[node name="Rope" type="Line2D" parent="RaisedPlatform/SwingingAxe/Pivot" unique_id=1044241413]
+points = PackedVector2Array(0, 0, 0, 120)
+width = 5.0
+default_color = Color(0.45, 0.32, 0.2, 1)
+
+[node name="AxeHead" type="Polygon2D" parent="RaisedPlatform/SwingingAxe/Pivot" unique_id=193365513]
+position = Vector2(0, 120)
+color = Color(0.65, 0.7, 0.78, 1)
+polygon = PackedVector2Array(-31, -20, 24, -24, 34, -6, 10, 21, -29, 18)
+
+[node name="Handle" type="Polygon2D" parent="RaisedPlatform/SwingingAxe/Pivot" unique_id=769072174]
+position = Vector2(0, 120)
+color = Color(0.42, 0.24, 0.12, 1)
+polygon = PackedVector2Array(-4, -18, 5, -18, 5, 32, -4, 32)
+
+[node name="Hitbox" type="Area2D" parent="RaisedPlatform/SwingingAxe/Pivot" unique_id=807163670]
+position = Vector2(0, 120)
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="RaisedPlatform/SwingingAxe/Pivot/Hitbox" unique_id=151070743]
+shape = SubResource("CircleShape2D_axe")
+
+[node name="Player" type="CharacterBody2D" parent="." unique_id=729074123 groups=["player"]]
+position = Vector2(220, 480)
+script = ExtResource("1_player")
+
+[node name="Visual" type="Polygon2D" parent="Player" unique_id=2041028860]
+visible = false
+color = Color(0.25, 0.72, 1, 1)
+polygon = PackedVector2Array(-22, -32, 22, -32, 22, 32, -22, 32)
+
+[node name="Sprite" type="Sprite2D" parent="Player" unique_id=665150980]
+scale = Vector2(0.5, 0.5)
+texture = ExtResource("3_player_art")
+
+[node name="SwordPivot" type="Node2D" parent="Player" unique_id=1106315022]
+visible = false
+z_index = 10
+
+[node name="Blade" type="Polygon2D" parent="Player/SwordPivot" unique_id=1687599027]
+position = Vector2(-1, 17)
+color = Color(0.93, 0.96, 1, 1)
+polygon = PackedVector2Array(0, -5, 55, -5, 68, 0, 55, 5, 0, 5)
+
+[node name="Hitbox" type="Area2D" parent="Player/SwordPivot"]
+collision_layer = 0
+collision_mask = 1
+monitoring = true
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="Player/SwordPivot/Hitbox"]
+position = Vector2(34, 17)
+shape = SubResource("RectangleShape2D_sword")
+
+[node name="DashTrail" type="Polygon2D" parent="Player" unique_id=644487829]
+visible = false
+color = Color(0.3, 0.85, 1, 0.65)
+polygon = PackedVector2Array(-62, -18, -4, -18, -4, 18, -62, 18)
+
+[node name="HookLine" type="Line2D" parent="Player" unique_id=569670690]
+visible = false
+width = 4.0
+default_color = Color(0.72, 0.9, 1, 1)
+
+[node name="HookHead" type="Polygon2D" parent="Player" unique_id=1221227337]
+visible = false
+color = Color(0.85, 0.9, 0.98, 1)
+polygon = PackedVector2Array(-8, -7, 8, -7, 13, 0, 8, 7, -8, 7, -13, 0)
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="Player" unique_id=1640370507]
+position = Vector2(1, 7)
+scale = Vector2(0.8, 0.6)
+shape = SubResource("RectangleShape2D_player")
+
+[node name="GustavinhoShow" type="CharacterBody2D" parent="." unique_id=2018341612 groups=["damageable"]]
+position = Vector2(1000, 598)
+script = ExtResource("5_dummy")
+
+[node name="Visual" type="Polygon2D" parent="GustavinhoShow" unique_id=1144316559]
+visible = false
+color = Color(0.75, 0.48, 0.24, 1)
+polygon = PackedVector2Array(-24, -42, 24, -42, 30, 42, -30, 42)
+
+[node name="Sprite" type="Sprite2D" parent="GustavinhoShow" unique_id=1919116096]
+position = Vector2(0, 10)
+texture = ExtResource("7_enemy_art")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="GustavinhoShow" unique_id=1926052666]
+position = Vector2(0, 10)
+shape = SubResource("RectangleShape2D_dummy")
+
+[node name="HealthLabel" type="Label" parent="GustavinhoShow" unique_id=244510194]
+offset_left = -55.0
+offset_top = -76.0
+offset_right = 60.0
+offset_bottom = -52.0
+theme_override_colors/font_color = Color(1, 0.92, 0.75, 1)
+theme_override_font_sizes/font_size = 16
+text = "GustavinhoShow: 5 / 5 HP"
+
+[node name="BossDoor" type="Area2D" parent="."]
+position = Vector2(1140, 558)
+script = ExtResource("10_door")
+
+[node name="DoorVisual" type="Polygon2D" parent="BossDoor"]
+color = Color(0.45, 0.25, 0.7, 1)
+polygon = PackedVector2Array(-28, 42, -28, -42, 28, -42, 28, 42)
+
+[node name="DoorGlow" type="Polygon2D" parent="BossDoor"]
+color = Color(0.75, 0.55, 1, 1)
+polygon = PackedVector2Array(-16, 32, -16, -32, 16, -32, 16, 32)
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="BossDoor"]
+position = Vector2(0, 10)
+shape = SubResource("RectangleShape2D_player")
+
+[node name="Hint" type="Label" parent="BossDoor"]
+offset_left = -55.0
+offset_top = -72.0
+offset_right = 70.0
+offset_bottom = -48.0
+theme_override_colors/font_color = Color(0.85, 0.75, 1, 1)
+text = "CHASE DOOR"
+
+[connection signal="body_entered" from="BossDoor" to="BossDoor" method="_on_body_entered"]
