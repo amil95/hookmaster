@@ -21,6 +21,7 @@ const DAMAGE_BOOST_START_SPEED := SPEED
 const MAX_DAMAGE_SPEED := DASH_SPEED
 const RESET_MARGIN := 120.0
 const HOOKSHOT_RANGE := 500.0
+const HOOKSHOT_PROJECTILE_SPEED := 850.0
 const HOOKSHOT_SWING_ACCELERATION := 950.0
 const HOOKSHOT_TAUT_TOLERANCE := 2.0
 const HOOKSHOT_ATTACH_IMPULSE := 220.0
@@ -35,12 +36,17 @@ var dash_remaining := 0.0
 var dash_cooldown_remaining := 0.0
 var facing_direction := 1.0
 var attack_cooldown_remaining := 0.0
+var slow_remaining := 0.0
+var slow_multiplier := 1.0
 var reset_pending := false
 var hookshot_attached := false
+var hookshot_firing := false
 var hook_anchor := Vector2.ZERO
 var hook_anchor_body: Node2D
 var hook_anchor_local := Vector2.ZERO
 var hook_length := 0.0
+var hook_projectile_position := Vector2.ZERO
+var hook_projectile_direction := Vector2.ZERO
 var ledge_grabbing := false
 var ledge_top_y := 0.0
 var ledge_wall_x := 0.0
@@ -59,6 +65,10 @@ func _physics_process(delta: float) -> void:
 	jump_cut_delay_remaining = maxf(jump_cut_delay_remaining - delta, 0.0)
 	dash_cooldown_remaining = maxf(dash_cooldown_remaining - delta, 0.0)
 	attack_cooldown_remaining = maxf(attack_cooldown_remaining - delta, 0.0)
+	slow_remaining = maxf(slow_remaining - delta, 0.0)
+	if slow_remaining == 0.0:
+		slow_multiplier = 1.0
+	var wants_upswing := Input.is_action_just_pressed("attack") and Input.is_action_pressed("up_attack") and not Input.is_action_pressed("pogo")
 	if Input.is_action_just_pressed("jump"):
 		jump_buffer_remaining = JUMP_BUFFER_TIME
 	if Input.is_action_just_released("jump"):
@@ -82,8 +92,13 @@ func _physics_process(delta: float) -> void:
 	if direction != 0.0:
 		facing_direction = direction
 		player_sprite.flip_h = facing_direction < 0.0
-	if Input.is_action_just_pressed("hookshot") and not hookshot_attached:
-		try_attach_hookshot()
+	if Input.is_action_just_pressed("hookshot") and not hookshot_attached and not hookshot_firing:
+		launch_hookshot_projectile()
+	if hookshot_firing:
+		if Input.is_action_pressed("hookshot"):
+			update_hookshot_projectile(delta)
+		else:
+			cancel_hookshot_projectile()
 	if hookshot_attached and not Input.is_action_pressed("hookshot"):
 		detach_hookshot()
 	if ledge_grabbing:
@@ -104,7 +119,7 @@ func _physics_process(delta: float) -> void:
 			return
 		if Input.is_action_just_pressed("attack") and attack_cooldown_remaining == 0.0:
 			attack_cooldown_remaining = ATTACK_COOLDOWN
-			attack()
+			attack(wants_upswing)
 		update_hookshot_swing(delta)
 		reset_if_out_of_bounds()
 		return
@@ -118,11 +133,11 @@ func _physics_process(delta: float) -> void:
 		pogo()
 	elif Input.is_action_just_pressed("attack") and attack_cooldown_remaining == 0.0:
 		attack_cooldown_remaining = ATTACK_COOLDOWN
-		attack()
+		attack(wants_upswing)
 
 	if dash_remaining > 0.0:
 		dash_remaining = maxf(dash_remaining - delta, 0.0)
-		velocity = Vector2(facing_direction * DASH_SPEED, 0.0)
+		velocity = Vector2(facing_direction * DASH_SPEED * slow_multiplier, 0.0)
 		move_and_slide()
 		if dash_remaining == 0.0:
 			end_dash_animation()
@@ -146,7 +161,7 @@ func _physics_process(delta: float) -> void:
 		if is_double_jump:
 			play_double_jump_animation()
 
-	velocity.x = move_toward(velocity.x, direction * SPEED, SPEED * 8.0 * delta)
+	velocity.x = move_toward(velocity.x, direction * SPEED * slow_multiplier, SPEED * 8.0 * delta)
 	move_and_slide()
 	if try_grab_ledge():
 		return
@@ -163,12 +178,21 @@ func perform_wall_jump() -> void:
 	jump_cut_delay_remaining = MIN_JUMP_HOLD_TIME
 	jump_released_early = not Input.is_action_pressed("jump")
 
-func attack() -> void:
+func attack(upward := false) -> void:
 	sword_pivot.visible = true
 	sword_pivot.scale = Vector2.ONE
 	var start_angle := 0.0
 	var end_angle := 0.0
-	if facing_direction > 0.0:
+	if upward:
+		# Sweep through the space directly above the character.
+		sword_pivot.position = Vector2(0.0, -14.0)
+		if facing_direction > 0.0:
+			start_angle = deg_to_rad(-160.0)
+			end_angle = deg_to_rad(-20.0)
+		else:
+			start_angle = deg_to_rad(-20.0)
+			end_angle = deg_to_rad(-160.0)
+	elif facing_direction > 0.0:
 		sword_pivot.position = Vector2(24.0, -8.0)
 		start_angle = deg_to_rad(55.0)
 		end_angle = deg_to_rad(-55.0)
@@ -186,11 +210,19 @@ func attack() -> void:
 	var hit_targets: Dictionary = {}
 	while swing.is_running():
 		await get_tree().physics_frame
-	for target in sword_hitbox.get_overlapping_bodies():
+		for target in sword_hitbox.get_overlapping_bodies():
+			if target.is_in_group("damageable") and not hit_targets.has(target):
+				hit_targets[target] = true
+				target.call("take_damage", calculate_attack_damage())
+		for target in sword_hitbox.get_overlapping_areas():
 			if target.is_in_group("damageable") and not hit_targets.has(target):
 				hit_targets[target] = true
 				target.call("take_damage", calculate_attack_damage())
 	sword_pivot.visible = false
+
+func apply_movement_slow(duration: float, multiplier: float) -> void:
+	slow_remaining = maxf(slow_remaining, duration)
+	slow_multiplier = minf(slow_multiplier, multiplier)
 
 func calculate_attack_damage() -> float:
 	var speed_ratio := clampf((velocity.length() - DAMAGE_BOOST_START_SPEED) / (MAX_DAMAGE_SPEED - DAMAGE_BOOST_START_SPEED), 0.0, 1.0)
@@ -261,14 +293,44 @@ func play_double_jump_animation() -> void:
 	jump_effect.chain().tween_property(player_sprite, "scale", Vector2(0.5, 0.5), 0.14)
 	jump_effect.chain().tween_property(player_sprite, "modulate", Color.WHITE, 0.14)
 
-func try_attach_hookshot() -> void:
-	var aim_direction := Vector2(facing_direction, -1.0).normalized()
-	var query := PhysicsRayQueryParameters2D.create(global_position, global_position + aim_direction * HOOKSHOT_RANGE)
+func launch_hookshot_projectile() -> void:
+	hookshot_firing = true
+	hook_projectile_position = global_position
+	hook_projectile_direction = Vector2(facing_direction, -1.0).normalized()
+	hook_line.width = 3.0
+	hook_head.scale = Vector2.ONE
+	update_hookshot_projectile_visual()
+
+func update_hookshot_projectile(delta: float) -> void:
+	var previous_position := hook_projectile_position
+	var next_position := previous_position + hook_projectile_direction * HOOKSHOT_PROJECTILE_SPEED * delta
+	var query := PhysicsRayQueryParameters2D.create(previous_position, next_position)
 	query.exclude = [get_rid()]
 	query.collision_mask = 1
 	var hit := get_world_2d().direct_space_state.intersect_ray(query)
-	if hit.is_empty():
+	if not hit.is_empty():
+		hook_projectile_position = hit.position
+		attach_hookshot(hit)
 		return
+	hook_projectile_position = next_position
+	update_hookshot_projectile_visual()
+	if global_position.distance_to(hook_projectile_position) >= HOOKSHOT_RANGE:
+		cancel_hookshot_projectile()
+
+func update_hookshot_projectile_visual() -> void:
+	var local_head := to_local(hook_projectile_position)
+	hook_line.points = PackedVector2Array([Vector2.ZERO, local_head])
+	hook_line.visible = true
+	hook_head.position = local_head
+	hook_head.visible = true
+
+func cancel_hookshot_projectile() -> void:
+	hookshot_firing = false
+	hook_line.visible = false
+	hook_head.visible = false
+
+func attach_hookshot(hit: Dictionary) -> void:
+	hookshot_firing = false
 
 	hookshot_attached = true
 	# Grappling a surface also refreshes the single aerial jump for the release.
@@ -288,13 +350,9 @@ func try_attach_hookshot() -> void:
 	if tangent.x * facing_direction < 0.0:
 		tangent = -tangent
 	velocity += tangent * HOOKSHOT_ATTACH_IMPULSE
+	hook_line.width = 4.0
+	hook_head.scale = Vector2.ONE
 	update_hookshot_visual()
-	hook_line.width = 0.0
-	hook_head.scale = Vector2.ZERO
-	var launch := create_tween()
-	launch.set_parallel(true)
-	launch.tween_property(hook_line, "width", 4.0, 0.08)
-	launch.tween_property(hook_head, "scale", Vector2.ONE, 0.08)
 
 func update_hookshot_swing(delta: float) -> void:
 	update_moving_hook_anchor()

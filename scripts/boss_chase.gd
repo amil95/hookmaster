@@ -8,20 +8,26 @@ const RIGHT_SOFT_LIMIT_X := 1040.0
 const PLATFORM_HEIGHT := 24.0
 const PLATFORM_Y := [610.0, 535.0, 460.0, 385.0]
 const UPPER_PLATFORM_Y := [220.0, 290.0, 360.0]
+const FloatingEnemy = preload("res://scripts/floating_enemy.gd")
 
 @onready var player: CharacterBody2D = $Player
 @onready var platform_stream: Node2D = $PlatformStream
 @onready var boss: Node2D = $Boss
+@onready var enemy_stream: Node2D = $EnemyStream
+@onready var shard_stream: Node2D = $ShardStream
 @onready var timer_label: Label = $HUD/TimerLabel
 @onready var result_label: Label = $HUD/ResultLabel
 
 var elapsed := 0.0
 var escape_progress := 0.0
 var next_platform_x := 0.0
-var boss_speed := 12.0
+var boss_speed := 24.0
+var boss_slow_remaining := 0.0
+var boss_slow_multiplier := 1.0
 var complete := false
 var rng := RandomNumberGenerator.new()
 var active_scroll_speed := BASE_SCROLL_SPEED
+var enemy_spawn_remaining := 2.5
 
 func _ready() -> void:
 	rng.randomize()
@@ -36,6 +42,8 @@ func _physics_process(delta: float) -> void:
 	elapsed += delta
 	update_scroll_speed()
 	move_platforms(active_scroll_speed, delta)
+	move_enemies(active_scroll_speed, delta)
+	move_shards(delta)
 	# The world is a conveyor: ordinary running is just below neutral, while
 	# dashes and hook movement earn forward progress and a faster escape.
 	# A hooked player is carried by the moving hook platform in player.gd.
@@ -49,6 +57,7 @@ func _physics_process(delta: float) -> void:
 	escape_progress += delta * (active_scroll_speed / BASE_SCROLL_SPEED)
 	update_timer()
 	spawn_ahead()
+	spawn_enemies(delta)
 	update_boss(delta)
 
 	if escape_progress >= SURVIVAL_TIME:
@@ -100,6 +109,36 @@ func add_platform(x: float, width: float, y: float) -> void:
 	collision.shape = shape
 	platform.add_child(collision)
 	platform_stream.add_child(platform)
+	# Keep the opening runway safe; later strips sometimes carry a small spike trap.
+	if x > 800.0 and rng.randf() < 0.32:
+		add_spikes(platform, width)
+
+func add_spikes(platform: StaticBody2D, width: float) -> void:
+	var spike := Area2D.new()
+	spike.position = Vector2(rng.randf_range(-width * 0.3, width * 0.3), -PLATFORM_HEIGHT * 0.5 - 12.0)
+	spike.collision_layer = 0
+	spike.collision_mask = 1
+	spike.body_entered.connect(_on_hazard_body_entered)
+
+	var visual := Polygon2D.new()
+	visual.color = Color(0.95, 0.32, 0.28)
+	visual.polygon = PackedVector2Array([
+		Vector2(-30, 12), Vector2(-20, -12), Vector2(-10, 12),
+		Vector2(0, -12), Vector2(10, 12), Vector2(20, -12), Vector2(30, 12)
+	])
+	spike.add_child(visual)
+
+	var collision := CollisionShape2D.new()
+	var shape := RectangleShape2D.new()
+	shape.size = Vector2(58, 20)
+	collision.shape = shape
+	spike.add_child(collision)
+	platform.add_child(spike)
+
+func _on_hazard_body_entered(body: Node2D) -> void:
+	if complete or not body.is_in_group("player"):
+		return
+	body.call("reset_scene", "Spikes! Resetting…")
 
 func move_platforms(scroll_speed: float, delta: float) -> void:
 	for platform in platform_stream.get_children():
@@ -109,8 +148,72 @@ func move_platforms(scroll_speed: float, delta: float) -> void:
 	# Keep the spawn coordinate in the same moving world-space as the chunks.
 	next_platform_x -= scroll_speed * delta
 
+func spawn_enemies(delta: float) -> void:
+	enemy_spawn_remaining -= delta
+	if enemy_spawn_remaining > 0.0:
+		return
+	# Escalate pressure across the run: roomy openings at the start, then a
+	# denser stream of enemies as the escape timer nears zero.
+	var danger_progress := clampf(escape_progress / SURVIVAL_TIME, 0.0, 1.0)
+	var average_interval := lerpf(3.2, 0.75, danger_progress)
+	enemy_spawn_remaining = rng.randf_range(average_interval * 0.75, average_interval * 1.25)
+	var enemy := Area2D.new()
+	enemy.set_script(FloatingEnemy)
+	enemy.position = Vector2(1420.0, rng.randf_range(255.0, 520.0))
+	enemy.collision_layer = 1
+	enemy.collision_mask = 1
+	enemy.add_to_group("damageable")
+
+	var visual := Polygon2D.new()
+	visual.color = Color(0.94, 0.45, 0.18)
+	visual.polygon = PackedVector2Array([Vector2(-20, 0), Vector2(-10, -18), Vector2(12, -14), Vector2(22, 0), Vector2(10, 16), Vector2(-12, 18)])
+	enemy.add_child(visual)
+	var collision := CollisionShape2D.new()
+	var shape := CircleShape2D.new()
+	shape.radius = 19.0
+	collision.shape = shape
+	enemy.add_child(collision)
+	enemy_stream.add_child(enemy)
+	enemy.connect("shattered", _on_enemy_shattered)
+
+func move_enemies(scroll_speed: float, delta: float) -> void:
+	for enemy in enemy_stream.get_children():
+		enemy.position.x -= scroll_speed * delta
+		if enemy.position.x < -100.0:
+			enemy.queue_free()
+
+func _on_enemy_shattered(world_position: Vector2) -> void:
+	for index in 3:
+		var shard := Node2D.new()
+		shard.position = world_position
+		shard.set_meta("velocity", Vector2(-rng.randf_range(650.0, 820.0), (index - 1) * 120.0))
+		var visual := Polygon2D.new()
+		visual.color = Color(1.0, 0.78, 0.25)
+		visual.rotation = rng.randf_range(0.0, TAU)
+		visual.polygon = PackedVector2Array([Vector2(-9, -5), Vector2(10, 0), Vector2(-7, 6)])
+		shard.add_child(visual)
+		shard_stream.add_child(shard)
+
+func move_shards(delta: float) -> void:
+	for shard in shard_stream.get_children():
+		var shard_velocity: Vector2 = shard.get_meta("velocity")
+		shard.position += shard_velocity * delta
+		if shard.position.x <= boss.position.x + 55.0:
+			slow_boss(1.4, 0.42)
+			shard.queue_free()
+
+func slow_boss(duration: float, multiplier: float) -> void:
+	boss_slow_remaining = maxf(boss_slow_remaining, duration)
+	boss_slow_multiplier = minf(boss_slow_multiplier, multiplier)
+
 func update_boss(delta: float) -> void:
-	# The boss steadily consumes screen space from the left.
-	boss.position.x += (boss_speed + elapsed * 0.3) * delta
+	var danger_progress := clampf(escape_progress / SURVIVAL_TIME, 0.0, 1.0)
+	boss_slow_remaining = maxf(0.0, boss_slow_remaining - delta)
+	if boss_slow_remaining == 0.0:
+		boss_slow_multiplier = 1.0
+	# Boss pressure rises on the same curve as enemy density. Defeated enemies
+	# return fire as shards, briefly reducing that pressure.
+	var escalating_speed := lerpf(boss_speed, 72.0, danger_progress)
+	boss.position.x += escalating_speed * boss_slow_multiplier * delta
 	if boss.position.x > player.position.x - 70.0:
 		player.reset_scene("The boss caught you! Resetting…")

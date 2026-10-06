@@ -57,6 +57,10 @@ horizontal_alignment = 1
 
 [node name="PlatformStream" type="Node2D" parent="."]
 
+[node name="EnemyStream" type="Node2D" parent="."]
+
+[node name="ShardStream" type="Node2D" parent="."]
+
 [node name="Boss" type="Node2D" parent="."]
 position = Vector2(-120, 500)
 
