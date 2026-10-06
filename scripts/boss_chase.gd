@@ -21,10 +21,14 @@ const FloatingEnemy = preload("res://scripts/floating_enemy.gd")
 @onready var enemy_stream: Node2D = $EnemyStream
 @onready var shard_stream: Node2D = $ShardStream
 @onready var timer_label: Label = $HUD/TimerLabel
+@onready var velocity_label: Label = $HUD/VelocityLabel
 @onready var result_label: Label = $HUD/ResultLabel
 
 var elapsed := 0.0
 var escape_progress := 0.0
+var velocity_integral := 0.0
+var mean_velocity := 0.0
+var top_velocity := 0.0
 var next_platform_x := 0.0
 var boss_speed := 240.0
 var boss_slow_remaining := 0.0
@@ -39,6 +43,7 @@ var enemy_spawn_remaining := 2.5
 var next_main_platform_is_one_way := false
 
 func _ready() -> void:
+	process_mode = Node.PROCESS_MODE_ALWAYS
 	rng.randomize()
 	# A generous runway before the first random gap.
 	add_platform(-100.0, 1050.0, 610.0)
@@ -49,6 +54,10 @@ func _physics_process(delta: float) -> void:
 		return
 
 	elapsed += delta
+	var current_velocity := player.velocity.length()
+	velocity_integral += current_velocity * delta
+	mean_velocity = velocity_integral / elapsed
+	top_velocity = maxf(top_velocity, current_velocity)
 	update_scroll_speed()
 	move_platforms(active_scroll_speed, delta)
 	move_enemies(active_scroll_speed, delta)
@@ -74,15 +83,20 @@ func _physics_process(delta: float) -> void:
 
 	if escape_progress >= SURVIVAL_TIME:
 		complete = true
-		result_label.text = "ESCAPED!"
+		result_label.text = "ESCAPED!\nMEAN VELOCITY %d  •  TOP VELOCITY %d\nPRESS ANY INPUT" % [roundi(mean_velocity), roundi(top_velocity)]
 		result_label.visible = true
-		await get_tree().create_timer(1.5).timeout
+		get_tree().paused = true
+
+func _unhandled_input(event: InputEvent) -> void:
+	if complete and event.is_pressed():
+		get_tree().paused = false
 		get_tree().change_scene_to_file("res://scenes/main.tscn")
 
 func update_timer() -> void:
 	var time_multiplier := active_scroll_speed / BASE_SCROLL_SPEED
 	var remaining := maxf(0.0, SURVIVAL_TIME - escape_progress)
 	timer_label.text = "ESCAPE IN %.1f  •  LEAD %d%%  •  %.1fx" % [remaining, roundi(lead), time_multiplier]
+	velocity_label.text = "VELOCITY  NOW %d  •  MEAN %d" % [roundi(player.velocity.length()), roundi(mean_velocity)]
 
 func update_scroll_speed() -> void:
 	var forward_pressure := maxf(player.position.x - SPEED_UP_START_X, 0.0)

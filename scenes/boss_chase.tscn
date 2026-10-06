@@ -35,6 +35,13 @@ theme_override_colors/font_color = Color(1, 0.82, 0.4, 1)
 theme_override_font_sizes/font_size = 21
 text = "ESCAPE IN 30.0"
 
+[node name="VelocityLabel" type="Label" parent="HUD"]
+offset_left = 48.0
+offset_top = 106.0
+theme_override_colors/font_color = Color(0.55, 0.75, 0.92, 1)
+theme_override_font_sizes/font_size = 16
+text = "VELOCITY  NOW 0  •  MEAN 0"
+
 [node name="ResetMessage" type="Label" parent="HUD"]
 visible = false
 offset_left = 430.0
@@ -48,11 +55,11 @@ horizontal_alignment = 1
 [node name="ResultLabel" type="Label" parent="HUD"]
 visible = false
 offset_left = 430.0
-offset_top = 300.0
+offset_top = 270.0
 offset_right = 860.0
-offset_bottom = 350.0
+offset_bottom = 440.0
 theme_override_colors/font_color = Color(0.4, 1, 0.7, 1)
-theme_override_font_sizes/font_size = 36
+theme_override_font_sizes/font_size = 28
 horizontal_alignment = 1
 
 [node name="PlatformStream" type="Node2D" parent="."]
