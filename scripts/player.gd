@@ -24,7 +24,7 @@ const HOOKSHOT_RANGE := 500.0
 const HOOKSHOT_PROJECTILE_SPEED := 1700.0
 const HOOKSHOT_SWING_ACCELERATION := 950.0
 const HOOKSHOT_TAUT_TOLERANCE := 2.0
-const HOOKSHOT_ATTACH_IMPULSE := 220.0
+const HOOKSHOT_ATTACH_IMPULSE := 420.0
 
 var jump_buffer_remaining := 0.0
 var jump_cut_delay_remaining := 0.0
