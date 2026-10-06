@@ -6,8 +6,10 @@ const MAX_SCROLL_SPEED := 620.0
 const SPEED_UP_START_X := 820.0
 const RIGHT_SOFT_LIMIT_X := 1040.0
 const PLATFORM_HEIGHT := 24.0
-const PLATFORM_Y := [610.0, 535.0, 460.0, 385.0]
-const UPPER_PLATFORM_Y := [220.0, 290.0, 360.0]
+# Lower routes are now uncommon. Most generated footing is elevated so the
+# hookshot becomes the primary way to preserve speed through the chase.
+const PLATFORM_Y := [535.0, 455.0, 455.0, 375.0, 375.0, 305.0]
+const UPPER_PLATFORM_Y := [155.0, 225.0, 295.0]
 const FloatingEnemy = preload("res://scripts/floating_enemy.gd")
 
 @onready var player: CharacterBody2D = $Player
@@ -84,7 +86,7 @@ func spawn_ahead() -> void:
 		var height: float = float(PLATFORM_Y[rng.randi_range(0, PLATFORM_Y.size() - 1)])
 		add_platform(next_platform_x + gap, width, height)
 		# Floating platforms create optional hookshot routes above the main path.
-		if rng.randf() < 0.45:
+		if rng.randf() < 0.72:
 			var upper_y: float = float(UPPER_PLATFORM_Y[rng.randi_range(0, UPPER_PLATFORM_Y.size() - 1)])
 			var upper_width := rng.randf_range(120.0, 210.0)
 			add_platform(next_platform_x + gap + rng.randf_range(50.0, 170.0), upper_width, upper_y)
@@ -110,8 +112,14 @@ func add_platform(x: float, width: float, y: float) -> void:
 	collision.shape = shape
 	platform.add_child(collision)
 	platform_stream.add_child(platform)
-	# Keep the opening runway safe; later strips sometimes carry a small spike trap.
-	if x > 800.0 and rng.randf() < 0.32:
+	# The high route is hazardous: use it as a hook anchor and swing past the
+	# spikes rather than treating every platform as a safe landing.
+	var spike_chance := 0.18
+	if y <= 460.0:
+		spike_chance = 0.68
+	elif y <= 540.0:
+		spike_chance = 0.38
+	if x > 800.0 and rng.randf() < spike_chance:
 		add_spikes(platform, width)
 
 func add_spikes(platform: StaticBody2D, width: float) -> void:
