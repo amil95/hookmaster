@@ -31,6 +31,7 @@ var complete := false
 var rng := RandomNumberGenerator.new()
 var active_scroll_speed := BASE_SCROLL_SPEED
 var enemy_spawn_remaining := 2.5
+var next_main_platform_is_one_way := false
 
 func _ready() -> void:
 	rng.randomize()
@@ -84,22 +85,25 @@ func spawn_ahead() -> void:
 		var gap := rng.randf_range(50.0, 115.0)
 		var width := rng.randf_range(180.0, 320.0)
 		var height: float = float(PLATFORM_Y[rng.randi_range(0, PLATFORM_Y.size() - 1)])
-		add_platform(next_platform_x + gap, width, height)
+		add_platform(next_platform_x + gap, width, height, next_main_platform_is_one_way)
+		next_main_platform_is_one_way = not next_main_platform_is_one_way
 		# Floating platforms create optional hookshot routes above the main path.
 		if rng.randf() < 0.72:
 			var upper_y: float = float(UPPER_PLATFORM_Y[rng.randi_range(0, UPPER_PLATFORM_Y.size() - 1)])
 			var upper_width := rng.randf_range(120.0, 210.0)
-			add_platform(next_platform_x + gap + rng.randf_range(50.0, 170.0), upper_width, upper_y)
+			add_platform(next_platform_x + gap + rng.randf_range(50.0, 170.0), upper_width, upper_y, next_main_platform_is_one_way)
 		next_platform_x += gap + width
 
-func add_platform(x: float, width: float, y: float) -> void:
+func add_platform(x: float, width: float, y: float, one_way := false) -> void:
 	var platform := StaticBody2D.new()
 	platform.position = Vector2(x + width * 0.5, y)
 	platform.add_to_group("chase_platform")
+	if one_way:
+		platform.add_to_group("one_way_platform")
 	platform.set_meta("width", width)
 
 	var visual := Polygon2D.new()
-	visual.color = Color("43b868")
+	visual.color = Color("4d8fff") if one_way else Color("43b868")
 	visual.polygon = PackedVector2Array([
 		Vector2(-width * 0.5, -PLATFORM_HEIGHT * 0.5), Vector2(width * 0.5, -PLATFORM_HEIGHT * 0.5),
 		Vector2(width * 0.5, PLATFORM_HEIGHT * 0.5), Vector2(-width * 0.5, PLATFORM_HEIGHT * 0.5)
@@ -110,6 +114,7 @@ func add_platform(x: float, width: float, y: float) -> void:
 	var shape := RectangleShape2D.new()
 	shape.size = Vector2(width, PLATFORM_HEIGHT)
 	collision.shape = shape
+	collision.one_way_collision = one_way
 	platform.add_child(collision)
 	platform_stream.add_child(platform)
 	# The high route is hazardous: use it as a hook anchor and swing past the

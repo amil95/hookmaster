@@ -25,6 +25,8 @@ const HOOKSHOT_PROJECTILE_SPEED := 1700.0
 const HOOKSHOT_SWING_ACCELERATION := 950.0
 const HOOKSHOT_TAUT_TOLERANCE := 2.0
 const HOOKSHOT_ATTACH_IMPULSE := 420.0
+const HOOK_PULL_SPEED := 1100.0
+const HOOK_PULL_RELEASE_SPEED := 620.0
 
 var jump_buffer_remaining := 0.0
 var jump_cut_delay_remaining := 0.0
@@ -47,6 +49,10 @@ var hook_anchor_local := Vector2.ZERO
 var hook_length := 0.0
 var hook_projectile_position := Vector2.ZERO
 var hook_projectile_direction := Vector2.ZERO
+var hook_pull_active := false
+var hook_pull_target := Vector2.ZERO
+var hook_pull_direction := Vector2.ZERO
+var drop_through_active := false
 var ledge_grabbing := false
 var ledge_top_y := 0.0
 var ledge_wall_x := 0.0
@@ -69,7 +75,10 @@ func _physics_process(delta: float) -> void:
 	if slow_remaining == 0.0:
 		slow_multiplier = 1.0
 	var wants_upswing := Input.is_action_just_pressed("attack") and Input.is_action_pressed("up_attack") and not Input.is_action_pressed("pogo")
-	if Input.is_action_just_pressed("jump"):
+	var wants_drop_through := Input.is_action_just_pressed("jump") and Input.is_action_pressed("pogo") and is_on_floor()
+	if wants_drop_through:
+		start_drop_through()
+	elif Input.is_action_just_pressed("jump"):
 		jump_buffer_remaining = JUMP_BUFFER_TIME
 	if Input.is_action_just_released("jump"):
 		jump_released_early = true
@@ -106,6 +115,8 @@ func _physics_process(delta: float) -> void:
 		return
 
 	if hookshot_attached:
+		if Input.is_action_just_pressed("hook_pull") and not hook_pull_active:
+			start_hook_pull()
 		if Input.is_action_just_pressed("jump") and jumps_remaining > 0:
 			# Keep the tangential rope momentum, then spend the air jump to launch away.
 			detach_hookshot()
@@ -139,6 +150,7 @@ func _physics_process(delta: float) -> void:
 		dash_remaining = maxf(dash_remaining - delta, 0.0)
 		velocity = Vector2(facing_direction * DASH_SPEED * slow_multiplier, 0.0)
 		move_and_slide()
+		handle_solid_platform_ceiling_impact()
 		if dash_remaining == 0.0:
 			end_dash_animation()
 		reset_if_out_of_bounds()
@@ -163,6 +175,7 @@ func _physics_process(delta: float) -> void:
 
 	velocity.x = move_toward(velocity.x, direction * SPEED * slow_multiplier, SPEED * 8.0 * delta)
 	move_and_slide()
+	handle_solid_platform_ceiling_impact()
 	if try_grab_ledge():
 		return
 	reset_if_out_of_bounds()
@@ -356,6 +369,9 @@ func attach_hookshot(hit: Dictionary) -> void:
 
 func update_hookshot_swing(delta: float) -> void:
 	update_moving_hook_anchor()
+	if hook_pull_active:
+		update_hook_pull(delta)
+		return
 	velocity.y += GRAVITY * delta
 	move_and_slide()
 	if is_on_floor():
@@ -380,7 +396,65 @@ func update_moving_hook_anchor() -> void:
 	hook_anchor = hook_anchor_body.to_global(hook_anchor_local)
 	# Carry the character by the exact platform displacement. Velocity remains
 	# relative to that platform, which keeps a scrolling-platform swing natural.
-	global_position += hook_anchor - previous_anchor
+	var anchor_displacement := hook_anchor - previous_anchor
+	global_position += anchor_displacement
+	if hook_pull_active:
+		hook_pull_target += anchor_displacement
+
+func start_hook_pull() -> void:
+	# Travel through the anchor and finish one rope length beyond it: a complete
+	# diameter from the starting point, launched in the attachment direction.
+	hook_pull_target = hook_anchor + (hook_anchor - global_position)
+	hook_pull_direction = (hook_pull_target - global_position).normalized()
+	hook_pull_active = not hook_pull_direction.is_zero_approx()
+	velocity = Vector2.ZERO
+
+func update_hook_pull(delta: float) -> void:
+	var distance_remaining := global_position.distance_to(hook_pull_target)
+	var travel_distance := minf(HOOK_PULL_SPEED * delta, distance_remaining)
+	var pull_collision := move_and_collide(hook_pull_direction * travel_distance)
+	update_hookshot_visual()
+	if pull_collision:
+		# Green platforms are solid even during a pull. Bounce away and lose a
+		# little movement speed instead of phasing through the obstacle.
+		finish_hook_pull(hook_pull_direction.bounce(pull_collision.get_normal()) * HOOK_PULL_RELEASE_SPEED * 0.65)
+		apply_movement_slow(0.25, 0.78)
+		return
+	if global_position.is_equal_approx(hook_pull_target):
+		finish_hook_pull(hook_pull_direction * HOOK_PULL_RELEASE_SPEED)
+
+func finish_hook_pull(release_velocity: Vector2) -> void:
+	hook_pull_active = false
+	hookshot_attached = false
+	hook_anchor_body = null
+	hook_line.visible = false
+	hook_head.visible = false
+	velocity = release_velocity
+
+func handle_solid_platform_ceiling_impact() -> void:
+	for collision_index in get_slide_collision_count():
+		var platform_collision := get_slide_collision(collision_index)
+		var platform := platform_collision.get_collider() as Node2D
+		if platform and platform.is_in_group("chase_platform") and not platform.is_in_group("one_way_platform") and platform_collision.get_normal().y > 0.5:
+			velocity.y = maxf(velocity.y, 180.0)
+			apply_movement_slow(0.2, 0.78)
+			return
+
+func start_drop_through() -> void:
+	if drop_through_active:
+		return
+	for collision_index in get_slide_collision_count():
+		var floor_collision := get_slide_collision(collision_index)
+		var platform := floor_collision.get_collider() as Node2D
+		if platform and platform.is_in_group("one_way_platform"):
+			drop_through_active = true
+			add_collision_exception_with(platform)
+			global_position.y += 4.0
+			await get_tree().create_timer(0.18).timeout
+			if is_instance_valid(platform):
+				remove_collision_exception_with(platform)
+			drop_through_active = false
+			return
 
 func update_hookshot_visual() -> void:
 	var local_anchor := to_local(hook_anchor)
@@ -395,6 +469,7 @@ func detach_hookshot() -> void:
 	var tangent := Vector2(-rope_direction.y, rope_direction.x)
 	velocity = tangent * velocity.dot(tangent)
 	hookshot_attached = false
+	hook_pull_active = false
 	hook_anchor_body = null
 	hook_line.visible = false
 	hook_head.visible = false
