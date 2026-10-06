@@ -5,6 +5,9 @@ const BASE_SCROLL_SPEED := 335.0
 const MAX_SCROLL_SPEED := 620.0
 const SPEED_UP_START_X := 820.0
 const RIGHT_SOFT_LIMIT_X := 1040.0
+const MAX_LEAD := 100.0
+const BOSS_SAFE_X := -180.0
+const BOSS_CATCH_OFFSET := 40.0
 const PLATFORM_HEIGHT := 24.0
 # Lower routes are now uncommon. Most generated footing is elevated so the
 # hookshot becomes the primary way to preserve speed through the chase.
@@ -23,10 +26,12 @@ const FloatingEnemy = preload("res://scripts/floating_enemy.gd")
 var elapsed := 0.0
 var escape_progress := 0.0
 var next_platform_x := 0.0
-var boss_speed := 24.0
+var boss_speed := 240.0
 var boss_slow_remaining := 0.0
 var boss_slow_multiplier := 1.0
 var boss_hit_tween: Tween
+var lead := 78.0
+var lead_setback_cooldown := 0.0
 var complete := false
 var rng := RandomNumberGenerator.new()
 var active_scroll_speed := BASE_SCROLL_SPEED
@@ -54,11 +59,14 @@ func _physics_process(delta: float) -> void:
 	# Applying the conveyor here too would move them twice per frame.
 	if not player.hookshot_attached:
 		player.position.x -= active_scroll_speed * delta
-	if player.position.x > RIGHT_SOFT_LIMIT_X:
+	# The soft limit regulates normal running. A hook swing must be allowed to
+	# overshoot the camera without colliding with an invisible position clamp.
+	if not player.hookshot_attached and player.position.x > RIGHT_SOFT_LIMIT_X:
 		player.position.x = RIGHT_SOFT_LIMIT_X
 		player.velocity.x = minf(player.velocity.x, 0.0)
 	# Faster world speed is an explicit reward: it advances the survival goal faster.
 	escape_progress += delta * (active_scroll_speed / BASE_SCROLL_SPEED)
+	update_lead(delta)
 	update_timer()
 	spawn_ahead()
 	spawn_enemies(delta)
@@ -74,11 +82,29 @@ func _physics_process(delta: float) -> void:
 func update_timer() -> void:
 	var time_multiplier := active_scroll_speed / BASE_SCROLL_SPEED
 	var remaining := maxf(0.0, SURVIVAL_TIME - escape_progress)
-	timer_label.text = "ESCAPE IN %.1f  •  %.1fx SPEED" % [remaining, time_multiplier]
+	timer_label.text = "ESCAPE IN %.1f  •  LEAD %d%%  •  %.1fx" % [remaining, roundi(lead), time_multiplier]
 
 func update_scroll_speed() -> void:
 	var forward_pressure := maxf(player.position.x - SPEED_UP_START_X, 0.0)
 	active_scroll_speed = clampf(BASE_SCROLL_SPEED + forward_pressure * 1.45, BASE_SCROLL_SPEED, MAX_SCROLL_SPEED)
+
+func update_lead(delta: float) -> void:
+	lead_setback_cooldown = maxf(0.0, lead_setback_cooldown - delta)
+	# Base running prevents an immediate collapse but does not build enough lead;
+	# hook swings, dashes, and forward positioning are what create separation.
+	var momentum_score := clampf((player.velocity.length() - 360.0) / 500.0, 0.0, 1.0)
+	var forward_position_score := clampf((player.position.x - 520.0) / 360.0, 0.0, 1.0)
+	var lead_rate := -2.2 + momentum_score * 10.0 + forward_position_score * 6.0
+	lead = clampf(lead + lead_rate * delta, 0.0, MAX_LEAD)
+
+func lose_lead(amount: float) -> void:
+	if lead_setback_cooldown > 0.0:
+		return
+	lead_setback_cooldown = 0.35
+	lead = maxf(0.0, lead - amount)
+
+func gain_lead(amount: float) -> void:
+	lead = minf(MAX_LEAD, lead + amount)
 
 func spawn_ahead() -> void:
 	while next_platform_x < 1550.0:
@@ -124,7 +150,7 @@ func add_platform(x: float, width: float, y: float, one_way := false) -> void:
 		spike_chance = 0.68
 	elif y <= 540.0:
 		spike_chance = 0.38
-	if x > 800.0 and rng.randf() < spike_chance:
+	if not one_way and x > 800.0 and rng.randf() < spike_chance:
 		add_spikes(platform, width)
 
 func add_spikes(platform: StaticBody2D, width: float) -> void:
@@ -197,6 +223,7 @@ func move_enemies(scroll_speed: float, delta: float) -> void:
 			enemy.queue_free()
 
 func _on_enemy_shattered(world_position: Vector2) -> void:
+	gain_lead(6.0)
 	for index in 3:
 		var shard := Node2D.new()
 		shard.position = world_position
@@ -233,13 +260,13 @@ func play_boss_slow_hit_animation() -> void:
 	boss_hit_tween.chain().tween_property(boss, "scale", Vector2.ONE, 0.16)
 
 func update_boss(delta: float) -> void:
-	var danger_progress := clampf(escape_progress / SURVIVAL_TIME, 0.0, 1.0)
 	boss_slow_remaining = maxf(0.0, boss_slow_remaining - delta)
 	if boss_slow_remaining == 0.0:
 		boss_slow_multiplier = 1.0
-	# Boss pressure rises on the same curve as enemy density. Defeated enemies
-	# return fire as shards, briefly reducing that pressure.
-	var escalating_speed := lerpf(boss_speed, 72.0, danger_progress)
-	boss.position.x += escalating_speed * boss_slow_multiplier * delta
+	# Lead—not elapsed time—defines visible boss pressure. Good movement pushes
+	# its target left; losing momentum brings the target into striking distance.
+	var lead_ratio := lead / MAX_LEAD
+	var target_x := lerpf(player.position.x - BOSS_CATCH_OFFSET, BOSS_SAFE_X, lead_ratio)
+	boss.position.x = move_toward(boss.position.x, target_x, boss_speed * boss_slow_multiplier * delta)
 	if boss.position.x > player.position.x - 70.0:
 		player.reset_scene("The boss caught you! Resetting…")

@@ -20,6 +20,7 @@ const BASE_ATTACK_DAMAGE := 1.0
 const DAMAGE_BOOST_START_SPEED := SPEED
 const MAX_DAMAGE_SPEED := DASH_SPEED
 const RESET_MARGIN := 120.0
+const FALL_RESET_MARGIN := 500.0
 const HOOKSHOT_RANGE := 500.0
 const HOOKSHOT_PROJECTILE_SPEED := 1700.0
 const HOOKSHOT_SWING_ACCELERATION := 950.0
@@ -49,6 +50,9 @@ var hook_anchor_local := Vector2.ZERO
 var hook_length := 0.0
 var hook_projectile_position := Vector2.ZERO
 var hook_projectile_direction := Vector2.ZERO
+var hook_projectile_origin := Vector2.ZERO
+var hook_projectile_velocity := Vector2.ZERO
+var hook_projectile_falling := false
 var hook_pull_active := false
 var hook_pull_target := Vector2.ZERO
 var hook_pull_direction := Vector2.ZERO
@@ -132,7 +136,10 @@ func _physics_process(delta: float) -> void:
 			attack_cooldown_remaining = ATTACK_COOLDOWN
 			attack(wants_upswing)
 		update_hookshot_swing(delta)
-		reset_if_out_of_bounds()
+		# A swinging player can deliberately arc beyond the camera. Do not reset
+		# them mid-swing; normal out-of-bounds handling resumes on release.
+		if not hookshot_attached:
+			reset_if_out_of_bounds()
 		return
 
 	if Input.is_action_just_pressed("dash") and dash_cooldown_remaining == 0.0:
@@ -236,6 +243,9 @@ func attack(upward := false) -> void:
 func apply_movement_slow(duration: float, multiplier: float) -> void:
 	slow_remaining = maxf(slow_remaining, duration)
 	slow_multiplier = minf(slow_multiplier, multiplier)
+	var chase_controller := get_parent()
+	if chase_controller and chase_controller.has_method("lose_lead"):
+		chase_controller.call("lose_lead", 7.0)
 
 func calculate_attack_damage() -> float:
 	var speed_ratio := clampf((velocity.length() - DAMAGE_BOOST_START_SPEED) / (MAX_DAMAGE_SPEED - DAMAGE_BOOST_START_SPEED), 0.0, 1.0)
@@ -264,8 +274,12 @@ func pogo() -> void:
 	sword_pivot.visible = false
 
 func reset_if_out_of_bounds() -> void:
-	var screen := get_viewport().get_visible_rect().grow(RESET_MARGIN)
-	if not reset_pending and not screen.has_point(global_position):
+	var screen := get_viewport().get_visible_rect()
+	var outside_sides_or_top := global_position.x < screen.position.x - RESET_MARGIN \
+		or global_position.x > screen.end.x + RESET_MARGIN \
+		or global_position.y < screen.position.y - RESET_MARGIN
+	var far_below_screen := global_position.y > screen.end.y + FALL_RESET_MARGIN
+	if not reset_pending and (outside_sides_or_top or far_below_screen):
 		reset_scene("Fell! Resetting…")
 
 func reset_scene(message: String) -> void:
@@ -310,13 +324,28 @@ func launch_hookshot_projectile() -> void:
 	hookshot_firing = true
 	hook_projectile_position = global_position
 	hook_projectile_direction = Vector2(facing_direction, -1.0).normalized()
+	hook_projectile_origin = global_position
+	hook_projectile_velocity = hook_projectile_direction * HOOKSHOT_PROJECTILE_SPEED
+	hook_projectile_falling = false
 	hook_line.width = 3.0
 	hook_head.scale = Vector2.ONE
+	hook_head.modulate = Color.WHITE
 	update_hookshot_projectile_visual()
 
 func update_hookshot_projectile(delta: float) -> void:
 	var previous_position := hook_projectile_position
-	var next_position := previous_position + hook_projectile_direction * HOOKSHOT_PROJECTILE_SPEED * delta
+	if hook_projectile_falling:
+		hook_projectile_velocity.y += GRAVITY * delta
+	else:
+		hook_projectile_velocity = hook_projectile_direction * HOOKSHOT_PROJECTILE_SPEED
+	var next_position := previous_position + hook_projectile_velocity * delta
+	if not hook_projectile_falling and hook_projectile_origin.distance_to(next_position) >= HOOKSHOT_RANGE:
+		# A missed projectile reaches its cable range, then becomes a loose falling
+		# hook that can still catch a floor or another platform while LB is held.
+		next_position = hook_projectile_origin + hook_projectile_direction * HOOKSHOT_RANGE
+		hook_projectile_falling = true
+		hook_projectile_velocity = Vector2.ZERO
+		hook_head.modulate = Color(1.0, 0.78, 0.35, 1.0)
 	var query := PhysicsRayQueryParameters2D.create(previous_position, next_position)
 	query.exclude = [get_rid()]
 	query.collision_mask = 1
@@ -327,7 +356,7 @@ func update_hookshot_projectile(delta: float) -> void:
 		return
 	hook_projectile_position = next_position
 	update_hookshot_projectile_visual()
-	if global_position.distance_to(hook_projectile_position) >= HOOKSHOT_RANGE:
+	if hook_projectile_falling and hook_projectile_position.y > global_position.y:
 		cancel_hookshot_projectile()
 
 func update_hookshot_projectile_visual() -> void:
@@ -339,11 +368,15 @@ func update_hookshot_projectile_visual() -> void:
 
 func cancel_hookshot_projectile() -> void:
 	hookshot_firing = false
+	hook_projectile_falling = false
 	hook_line.visible = false
 	hook_head.visible = false
+	hook_head.modulate = Color.WHITE
 
 func attach_hookshot(hit: Dictionary) -> void:
 	hookshot_firing = false
+	hook_projectile_falling = false
+	hook_head.modulate = Color.WHITE
 
 	hookshot_attached = true
 	# Grappling a surface also refreshes the single aerial jump for the release.
