@@ -24,6 +24,7 @@ var next_platform_x := 0.0
 var boss_speed := 24.0
 var boss_slow_remaining := 0.0
 var boss_slow_multiplier := 1.0
+var boss_hit_tween: Tween
 var complete := false
 var rng := RandomNumberGenerator.new()
 var active_scroll_speed := BASE_SCROLL_SPEED
@@ -199,12 +200,24 @@ func move_shards(delta: float) -> void:
 		var shard_velocity: Vector2 = shard.get_meta("velocity")
 		shard.position += shard_velocity * delta
 		if shard.position.x <= boss.position.x + 55.0:
-			slow_boss(1.4, 0.42)
+			slow_boss(2.0, 0.20)
+			play_boss_slow_hit_animation()
 			shard.queue_free()
 
 func slow_boss(duration: float, multiplier: float) -> void:
 	boss_slow_remaining = maxf(boss_slow_remaining, duration)
 	boss_slow_multiplier = minf(boss_slow_multiplier, multiplier)
+
+func play_boss_slow_hit_animation() -> void:
+	if is_instance_valid(boss_hit_tween):
+		boss_hit_tween.kill()
+	boss.modulate = Color(0.32, 0.82, 1.0, 1.0)
+	boss.scale = Vector2(1.22, 0.76)
+	boss_hit_tween = create_tween()
+	boss_hit_tween.set_parallel(true)
+	boss_hit_tween.tween_property(boss, "modulate", Color.WHITE, 0.32)
+	boss_hit_tween.tween_property(boss, "scale", Vector2(0.86, 1.14), 0.1)
+	boss_hit_tween.chain().tween_property(boss, "scale", Vector2.ONE, 0.16)
 
 func update_boss(delta: float) -> void:
 	var danger_progress := clampf(escape_progress / SURVIVAL_TIME, 0.0, 1.0)
