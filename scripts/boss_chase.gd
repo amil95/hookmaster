@@ -1,9 +1,9 @@
 extends Node2D
 
 const SURVIVAL_TIME := 30.0
-const BASE_SCROLL_SPEED := 335.0
-const MAX_SCROLL_SPEED := 620.0
-const SPEED_UP_START_X := 820.0
+const BASE_SCROLL_SPEED := 255.0
+const MAX_SCROLL_SPEED := 1250.0
+const SPEED_UP_START_X := 720.0
 const RIGHT_SOFT_LIMIT_X := 1040.0
 const MAX_LEAD := 100.0
 const BOSS_SAFE_X := -180.0
@@ -69,27 +69,29 @@ func _physics_process(delta: float) -> void:
 	# Applying the conveyor here too would move them twice per frame.
 	if not player.hookshot_attached:
 		player.position.x -= active_scroll_speed * delta
-	# The soft limit regulates normal running. A hook swing must be allowed to
-	# overshoot the camera without colliding with an invisible position clamp.
-	if not player.hookshot_attached and player.position.x > RIGHT_SOFT_LIMIT_X:
-		player.position.x = RIGHT_SOFT_LIMIT_X
-		player.velocity.x = minf(player.velocity.x, 0.0)
 	# Faster world speed is an explicit reward: it advances the survival goal faster.
 	escape_progress += delta * (active_scroll_speed / BASE_SCROLL_SPEED)
 	update_lead(delta)
 	update_timer()
+	if escape_progress >= SURVIVAL_TIME:
+		show_escape_results()
+		return
 	spawn_ahead()
 	spawn_enemies(delta)
 	update_boss(delta)
 
-	if escape_progress >= SURVIVAL_TIME:
-		complete = true
-		result_label.text = "ESCAPED!\nMEAN VELOCITY %d  •  TOP VELOCITY %d\nPRESS ANY INPUT" % [roundi(mean_velocity), roundi(top_velocity)]
-		result_label.visible = true
-		result_input_locked = true
-		get_tree().paused = true
-		await get_tree().create_timer(3.0, true).timeout
-		result_input_locked = false
+func show_escape_results() -> void:
+	complete = true
+	# Resolve success before any boss/hazard step, then explicitly freeze the
+	# player as well as the scene tree so no late collision can cause a reset.
+	player.velocity = Vector2.ZERO
+	player.set_physics_process(false)
+	result_label.text = "ESCAPED!\nMEAN VELOCITY %d  •  TOP VELOCITY %d\nPRESS ANY INPUT" % [roundi(mean_velocity), roundi(top_velocity)]
+	result_label.visible = true
+	result_input_locked = true
+	get_tree().paused = true
+	await get_tree().create_timer(3.0, true).timeout
+	result_input_locked = false
 
 func _unhandled_input(event: InputEvent) -> void:
 	if complete and not result_input_locked and event.is_pressed():
@@ -104,7 +106,13 @@ func update_timer() -> void:
 
 func update_scroll_speed() -> void:
 	var forward_pressure := maxf(player.position.x - SPEED_UP_START_X, 0.0)
-	active_scroll_speed = clampf(BASE_SCROLL_SPEED + forward_pressure * 1.45, BASE_SCROLL_SPEED, MAX_SCROLL_SPEED)
+	# Normal running deliberately gains visible screen space. Only a fraction of
+	# excess velocity is followed; position pressure then smoothly reels the
+	# level forward before the player reaches the far edge.
+	var excess_velocity := maxf(player.velocity.x - BASE_SCROLL_SPEED, 0.0)
+	var velocity_follow_speed := BASE_SCROLL_SPEED + excess_velocity * 0.25
+	var position_catchup_speed := BASE_SCROLL_SPEED + forward_pressure * 2.1
+	active_scroll_speed = clampf(maxf(velocity_follow_speed, position_catchup_speed), BASE_SCROLL_SPEED, MAX_SCROLL_SPEED)
 
 func update_lead(delta: float) -> void:
 	lead_setback_cooldown = maxf(0.0, lead_setback_cooldown - delta)
