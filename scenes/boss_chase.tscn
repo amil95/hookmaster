@@ -33,7 +33,7 @@ offset_left = 48.0
 offset_top = 74.0
 theme_override_colors/font_color = Color(1, 0.82, 0.4, 1)
 theme_override_font_sizes/font_size = 21
-text = "ESCAPE IN 30.0"
+text = "ESCAPE IN 60.0"
 
 [node name="VelocityLabel" type="Label" parent="HUD"]
 offset_left = 48.0

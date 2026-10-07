@@ -1,13 +1,20 @@
 extends Node2D
 
-const SURVIVAL_TIME := 30.0
+const SURVIVAL_TIME := 60.0
 const BASE_SCROLL_SPEED := 255.0
 const MAX_SCROLL_SPEED := 1250.0
 const SPEED_UP_START_X := 720.0
 const RIGHT_SOFT_LIMIT_X := 1040.0
 const MAX_LEAD := 100.0
 const BOSS_SAFE_X := -180.0
-const BOSS_CATCH_OFFSET := 40.0
+const BOSS_DANGER_X := 200.0
+const BOSS_CATCH_DISTANCE := 72.0
+const RUN_LOG_PATH := "user://chase_run_scores.csv"
+const TELEMETRY_QUEUE_PATH := "user://chase_telemetry_queue.json"
+const TELEMETRY_ENDPOINT := "https://script.google.com/macros/s/AKfycbwMAGzruSWgjimE0uZ6e4P6OcuDI_asJwFeRkT7kKRsSpgMCb6IPCNkY_GgtJBa8vChQQ/exec"
+# This identifies Hookmaster's client, but cannot be a true secret because it
+# ships with the game. The endpoint must still rate-limit and validate input.
+const TELEMETRY_TOKEN := "abc123asdasdklxcv"
 const PLATFORM_HEIGHT := 24.0
 # Lower routes are now uncommon. Most generated footing is elevated so the
 # hookshot becomes the primary way to preserve speed through the chase.
@@ -30,21 +37,37 @@ var velocity_integral := 0.0
 var mean_velocity := 0.0
 var top_velocity := 0.0
 var result_input_locked := false
+var lead_integral := 0.0
+var relative_velocity_integral := 0.0
+var run_recorded := false
 var next_platform_x := 0.0
-var boss_speed := 240.0
+var boss_speed := 480.0
 var boss_slow_remaining := 0.0
 var boss_slow_multiplier := 1.0
 var boss_hit_tween: Tween
-var lead := 78.0
+var lead := 55.0
 var lead_setback_cooldown := 0.0
+var relative_velocity := 0.0
 var complete := false
 var rng := RandomNumberGenerator.new()
 var active_scroll_speed := BASE_SCROLL_SPEED
 var enemy_spawn_remaining := 2.5
 var next_main_platform_is_one_way := false
+var install_id := ""
+var telemetry_request: HTTPRequest
+var telemetry_uploading := false
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	install_id = load_or_create_install_id()
+	telemetry_request = HTTPRequest.new()
+	# Apps Script replies with a redirect after it has handled the POST. Following
+	# that redirect converts a successful append into an unrelated HTTP 400.
+	telemetry_request.max_redirects = 0
+	telemetry_request.request_completed.connect(_on_telemetry_request_completed)
+	add_child(telemetry_request)
+	# HTTPRequest must be fully inside the scene tree before its first request.
+	call_deferred("upload_next_telemetry_record")
 	rng.randomize()
 	# A generous runway before the first random gap.
 	add_platform(-100.0, 1050.0, 610.0)
@@ -72,6 +95,8 @@ func _physics_process(delta: float) -> void:
 	# Faster world speed is an explicit reward: it advances the survival goal faster.
 	escape_progress += delta * (active_scroll_speed / BASE_SCROLL_SPEED)
 	update_lead(delta)
+	lead_integral += lead * delta
+	relative_velocity_integral += relative_velocity * delta
 	update_timer()
 	if escape_progress >= SURVIVAL_TIME:
 		show_escape_results()
@@ -86,12 +111,137 @@ func show_escape_results() -> void:
 	# player as well as the scene tree so no late collision can cause a reset.
 	player.velocity = Vector2.ZERO
 	player.set_physics_process(false)
+	record_run("escaped", "")
 	result_label.text = "ESCAPED!\nMEAN VELOCITY %d  •  TOP VELOCITY %d\nPRESS ANY INPUT" % [roundi(mean_velocity), roundi(top_velocity)]
 	result_label.visible = true
 	result_input_locked = true
 	get_tree().paused = true
 	await get_tree().create_timer(3.0, true).timeout
 	result_input_locked = false
+
+func record_player_reset(reason: String) -> void:
+	record_run("failed", reason)
+
+func record_run(outcome: String, reason: String) -> void:
+	if run_recorded:
+		return
+	run_recorded = true
+	var mean_lead := lead_integral / maxf(elapsed, 0.001)
+	var mean_vs_boss := relative_velocity_integral / maxf(elapsed, 0.001)
+	var new_file := not FileAccess.file_exists(RUN_LOG_PATH)
+	var file := FileAccess.open(RUN_LOG_PATH, FileAccess.WRITE if new_file else FileAccess.READ_WRITE)
+	if file == null:
+		push_warning("Could not write chase run log: %s" % RUN_LOG_PATH)
+		return
+	if new_file:
+		file.store_line("timestamp,outcome,reason,real_seconds,escape_progress,mean_velocity,top_velocity,mean_lead,mean_vs_boss")
+	else:
+		file.seek_end()
+	var safe_reason := reason.replace(",", ";").replace("\n", " ")
+	file.store_line("%s,%s,%s,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f" % [
+		Time.get_datetime_string_from_system(), outcome, safe_reason, elapsed, escape_progress,
+		mean_velocity, top_velocity, mean_lead, mean_vs_boss
+	])
+	file.close()
+	queue_telemetry_record({
+		"install_id": install_id,
+		"build_id": get_build_id(),
+		"outcome": outcome,
+		"reason": reason,
+		"real_seconds": elapsed,
+		"escape_progress": escape_progress,
+		"mean_velocity": mean_velocity,
+		"top_velocity": top_velocity,
+		"mean_lead": mean_lead,
+		"mean_vs_boss": mean_vs_boss,
+		"final_lead": lead,
+		"boss_gap": player.position.x - boss.position.x,
+	})
+	upload_next_telemetry_record()
+
+func load_or_create_install_id() -> String:
+	const INSTALL_ID_PATH := "user://install_id.txt"
+	if FileAccess.file_exists(INSTALL_ID_PATH):
+		var existing := FileAccess.get_file_as_string(INSTALL_ID_PATH).strip_edges()
+		if not existing.is_empty():
+			return existing
+	var new_id := "%s-%s" % [Time.get_unix_time_from_system(), randi()]
+	var file := FileAccess.open(INSTALL_ID_PATH, FileAccess.WRITE)
+	if file != null:
+		file.store_string(new_id)
+		file.close()
+	return new_id
+
+func get_build_id() -> String:
+	# Source-based testers retain .git, so their pulled commit is reported. An
+	# exported build has no .git directory and falls back to the project version.
+	var build_id := str(ProjectSettings.get_setting("application/config/version", "dev"))
+	var head_path := "res://.git/HEAD"
+	if FileAccess.file_exists(head_path):
+		var head := FileAccess.get_file_as_string(head_path).strip_edges()
+		if head.begins_with("ref: "):
+			var ref := head.trim_prefix("ref: ")
+			var ref_path := "res://.git/%s" % ref
+			if FileAccess.file_exists(ref_path):
+				build_id = FileAccess.get_file_as_string(ref_path).strip_edges().left(12)
+		elif head.length() >= 7:
+			build_id = head.left(12)
+	# Git is present for source-based playtesters. The check simply falls back
+	# for downloaded exports and flags runs made with uncommitted local edits.
+	var status_output: Array = []
+	var git_exit_code := OS.execute("git", ["-C", ProjectSettings.globalize_path("res://"), "status", "--porcelain"], status_output, true)
+	if git_exit_code == 0 and not status_output.is_empty() and not str(status_output[0]).strip_edges().is_empty():
+		build_id += "-dirty"
+	return build_id
+
+func queue_telemetry_record(record: Dictionary) -> void:
+	var queue := load_telemetry_queue()
+	queue.append(record)
+	var file := FileAccess.open(TELEMETRY_QUEUE_PATH, FileAccess.WRITE)
+	if file != null:
+		file.store_string(JSON.stringify(queue))
+		file.close()
+
+func load_telemetry_queue() -> Array:
+	if not FileAccess.file_exists(TELEMETRY_QUEUE_PATH):
+		return []
+	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(TELEMETRY_QUEUE_PATH))
+	return parsed if parsed is Array else []
+
+func save_telemetry_queue(queue: Array) -> void:
+	var file := FileAccess.open(TELEMETRY_QUEUE_PATH, FileAccess.WRITE)
+	if file != null:
+		file.store_string(JSON.stringify(queue))
+		file.close()
+
+func upload_next_telemetry_record() -> void:
+	if telemetry_uploading or telemetry_request == null:
+		return
+	var queue := load_telemetry_queue()
+	if queue.is_empty():
+		return
+	var payload: Dictionary = queue[0]
+	payload["token"] = TELEMETRY_TOKEN
+	telemetry_uploading = true
+	var error := telemetry_request.request(
+		TELEMETRY_ENDPOINT,
+		["Content-Type: application/json"],
+		HTTPClient.METHOD_POST,
+		JSON.stringify(payload)
+	)
+	if error != OK:
+		telemetry_uploading = false
+		return
+	# Google Apps Script accepts the POST before its proxy emits an unreliable
+	# completion status. Remove this item once Godot has handed it to the
+	# transport; otherwise the same first item is retried forever. The CSV log
+	# remains the durable source if a manual re-upload is ever needed.
+	queue.pop_front()
+	save_telemetry_queue(queue)
+
+func _on_telemetry_request_completed(_result: int, _response_code: int, _headers: PackedStringArray, _body: PackedByteArray) -> void:
+	telemetry_uploading = false
+	upload_next_telemetry_record()
 
 func _unhandled_input(event: InputEvent) -> void:
 	if complete and not result_input_locked and event.is_pressed():
@@ -102,7 +252,7 @@ func update_timer() -> void:
 	var time_multiplier := active_scroll_speed / BASE_SCROLL_SPEED
 	var remaining := maxf(0.0, SURVIVAL_TIME - escape_progress)
 	timer_label.text = "ESCAPE IN %.1f  •  LEAD %d%%  •  %.1fx" % [remaining, roundi(lead), time_multiplier]
-	velocity_label.text = "VELOCITY  NOW %d  •  MEAN %d" % [roundi(player.velocity.length()), roundi(mean_velocity)]
+	velocity_label.text = "VELOCITY  NOW %d  •  MEAN %d  •  VS BOSS %+d" % [roundi(player.velocity.length()), roundi(mean_velocity), roundi(relative_velocity)]
 
 func update_scroll_speed() -> void:
 	var forward_pressure := maxf(player.position.x - SPEED_UP_START_X, 0.0)
@@ -116,11 +266,14 @@ func update_scroll_speed() -> void:
 
 func update_lead(delta: float) -> void:
 	lead_setback_cooldown = maxf(0.0, lead_setback_cooldown - delta)
-	# Base running prevents an immediate collapse but does not build enough lead;
-	# hook swings, dashes, and forward positioning are what create separation.
-	var momentum_score := clampf((player.velocity.length() - 360.0) / 500.0, 0.0, 1.0)
+	# Lead is relative to the boss's pursuit capability. A player must outrun
+	# the current boss pressure to build space; raw speed alone is not enough.
+	var forward_velocity := maxf(player.velocity.x, 0.0)
+	var boss_pressure_speed := boss_speed
+	relative_velocity = forward_velocity - boss_pressure_speed
+	var momentum_score := clampf(relative_velocity / 450.0, 0.0, 1.0)
 	var forward_position_score := clampf((player.position.x - 520.0) / 360.0, 0.0, 1.0)
-	var lead_rate := -2.2 + momentum_score * 10.0 + forward_position_score * 6.0
+	var lead_rate := -6.0 + momentum_score * 12.0 + forward_position_score * 0.5
 	lead = clampf(lead + lead_rate * delta, 0.0, MAX_LEAD)
 
 func lose_lead(amount: float) -> void:
@@ -249,7 +402,6 @@ func move_enemies(scroll_speed: float, delta: float) -> void:
 			enemy.queue_free()
 
 func _on_enemy_shattered(world_position: Vector2) -> void:
-	gain_lead(6.0)
 	for index in 3:
 		var shard := Node2D.new()
 		shard.position = world_position
@@ -266,13 +418,13 @@ func move_shards(delta: float) -> void:
 		var shard_velocity: Vector2 = shard.get_meta("velocity")
 		shard.position += shard_velocity * delta
 		if shard.position.x <= boss.position.x + 55.0:
-			slow_boss(2.0, 0.20)
+			push_boss_back(80.0)
 			play_boss_slow_hit_animation()
 			shard.queue_free()
 
-func slow_boss(duration: float, multiplier: float) -> void:
-	boss_slow_remaining = maxf(boss_slow_remaining, duration)
-	boss_slow_multiplier = minf(boss_slow_multiplier, multiplier)
+func push_boss_back(distance: float) -> void:
+	# A shard only changes the chase once it visibly reaches the boss.
+	boss.position.x -= distance
 
 func play_boss_slow_hit_animation() -> void:
 	if is_instance_valid(boss_hit_tween):
@@ -286,13 +438,18 @@ func play_boss_slow_hit_animation() -> void:
 	boss_hit_tween.chain().tween_property(boss, "scale", Vector2.ONE, 0.16)
 
 func update_boss(delta: float) -> void:
-	boss_slow_remaining = maxf(0.0, boss_slow_remaining - delta)
-	if boss_slow_remaining == 0.0:
-		boss_slow_multiplier = 1.0
 	# Lead—not elapsed time—defines visible boss pressure. Good movement pushes
-	# its target left; losing momentum brings the target into striking distance.
+	# its target left; losing momentum brings it toward a fixed danger position.
+	# Do not derive this target from player X: that would make faster running
+	# visually pull the boss closer.
 	var lead_ratio := lead / MAX_LEAD
-	var target_x := lerpf(player.position.x - BOSS_CATCH_OFFSET, BOSS_SAFE_X, lead_ratio)
-	boss.position.x = move_toward(boss.position.x, target_x, boss_speed * boss_slow_multiplier * delta)
-	if boss.position.x > player.position.x - 70.0:
-		player.reset_scene("The boss caught you! Resetting…")
+	var target_x := lerpf(BOSS_DANGER_X, BOSS_SAFE_X, lead_ratio)
+	# Once the hidden lead is exhausted, switch from the abstract pressure meter
+	# to a visible pursuit. This avoids a death while the boss is still clearly
+	# far away, while still letting a zero-lead state become dangerous.
+	if lead <= 0.0:
+		target_x = player.position.x - BOSS_CATCH_DISTANCE
+	boss.position.x = move_toward(boss.position.x, target_x, boss_speed * delta)
+	var boss_gap := player.position.x - boss.position.x
+	if lead <= 0.0 and boss_gap <= BOSS_CATCH_DISTANCE:
+		player.reset_scene("The boss caught you! Gap %.0f • lead %.0f%%" % [boss_gap, lead])

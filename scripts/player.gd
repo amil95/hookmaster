@@ -41,6 +41,7 @@ var facing_direction := 1.0
 var attack_cooldown_remaining := 0.0
 var slow_remaining := 0.0
 var slow_multiplier := 1.0
+var solid_impact_slow_cooldown := 0.0
 var reset_pending := false
 var hookshot_attached := false
 var hookshot_firing := false
@@ -76,6 +77,7 @@ func _physics_process(delta: float) -> void:
 	dash_cooldown_remaining = maxf(dash_cooldown_remaining - delta, 0.0)
 	attack_cooldown_remaining = maxf(attack_cooldown_remaining - delta, 0.0)
 	slow_remaining = maxf(slow_remaining - delta, 0.0)
+	solid_impact_slow_cooldown = maxf(solid_impact_slow_cooldown - delta, 0.0)
 	if slow_remaining == 0.0:
 		slow_multiplier = 1.0
 	var wants_upswing := Input.is_action_just_pressed("attack") and Input.is_action_pressed("up_attack") and not Input.is_action_pressed("pogo")
@@ -286,6 +288,9 @@ func reset_scene(message: String) -> void:
 	if reset_pending:
 		return
 	reset_pending = true
+	var scene_controller := get_parent()
+	if scene_controller and scene_controller.has_method("record_player_reset"):
+		scene_controller.call("record_player_reset", message)
 	velocity = Vector2.ZERO
 	set_physics_process(false)
 	if message.begins_with("Axe"):
@@ -470,7 +475,10 @@ func handle_solid_platform_ceiling_impact() -> void:
 		var platform := platform_collision.get_collider() as Node2D
 		if platform and platform.is_in_group("chase_platform") and not platform.is_in_group("one_way_platform") and platform_collision.get_normal().y > 0.5:
 			velocity.y = maxf(velocity.y, 180.0)
-			apply_movement_slow(0.2, 0.78)
+			# A sustained underside contact should not continually refresh the slow.
+			if solid_impact_slow_cooldown == 0.0:
+				solid_impact_slow_cooldown = 0.35
+				apply_movement_slow(0.2, 0.78)
 			return
 
 func start_drop_through() -> void:
